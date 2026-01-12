@@ -1,0 +1,72 @@
+pipeline {
+    agent any
+
+    environment {
+        REGISTRY_USER = 'youruser'
+        TAG = "${BUILD_NUMBER}"
+        JWT_SECRET = credentials('jwt-secret')
+        POSTGRES_PASSWORD = credentials('postgres-password')
+    }
+
+    stages {
+
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Build & Test Backend') {
+            steps {
+                dir('backend') {
+                    sh 'mvn clean test'
+                }
+            }
+        }
+
+        stage('Build Frontend') {
+            steps {
+                dir('frontend') {
+                    sh 'npm install'
+                    sh 'npm run build'
+                }
+            }
+        }
+
+        stage('Build & Push Images') {
+            steps {
+                withCredentials([usernamePassword(
+                    credentialsId: 'dockerhub-creds',
+                    usernameVariable: 'DOCKER_USER',
+                    passwordVariable: 'DOCKER_PASS'
+                )]) {
+                    sh '''
+                        echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+
+                        docker build -t $REGISTRY_USER/ticket-system-backend:${TAG} backend
+                        docker tag $REGISTRY_USER/ticket-system-backend:${TAG} $REGISTRY_USER/ticket-system-backend:latest
+                        docker push $REGISTRY_USER/ticket-system-backend:${TAG}
+                        docker push $REGISTRY_USER/ticket-system-backend:latest
+
+                        docker build -t $REGISTRY_USER/ticket-system-frontend:${TAG} frontend
+                        docker tag $REGISTRY_USER/ticket-system-frontend:${TAG} $REGISTRY_USER/ticket-system-frontend:latest
+                        docker push $REGISTRY_USER/ticket-system-frontend:${TAG}
+                        docker push $REGISTRY_USER/ticket-system-frontend:latest
+                    '''
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                sh '''
+                    docker pull $REGISTRY_USER/ticket-system-backend:${TAG}
+                    docker pull $REGISTRY_USER/ticket-system-frontend:${TAG}
+
+                    export TAG=${TAG}
+                    docker-compose up -d
+                '''
+            }
+        }
+    }
+}
